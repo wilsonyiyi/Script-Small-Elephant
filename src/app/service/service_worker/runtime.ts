@@ -116,7 +116,7 @@ export class RuntimeService {
   scriptMatchDisable: UrlMatch<string> = new UrlMatch<string>();
   blackMatch: UrlMatch<string> = new UrlMatch<string>();
   private readonly codeCacheMap = new Map<string, TCodeCache>();
-  private readonly pageLoadCaches = new Map<string, TPageLoadScriptCache>();
+  public readonly pageLoadCaches = new Map<string, TPageLoadScriptCache>();
 
   logger: Logger;
 
