@@ -678,6 +678,9 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
       expect(result?.injectScriptList[0].resource[resourceUrl].base64).toBeUndefined();
       expect(update).toHaveBeenCalledTimes(1);
       expect(update.mock.calls[0][0][0].id).toBe(script.uuid);
+      const updatedCode = update.mock.calls[0][0][0].js[0].code;
+      expect(updatedCode).toContain("console.log('new resource');");
+      expect(updatedCode).not.toContain("console.log('old resource');");
       expect(runtime.pageLoadCaches.get(script.uuid)?.localResources[0].sha512).toBe("new-sha");
     });
   });
@@ -719,6 +722,54 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
       });
       expect(runtime.getPageScriptMatchingResultByUrl("https://www.example.com/path", true, true).size).toBe(0);
       expect(runtime.pageLoadCaches.size).toBe(0);
+    });
+
+    it("应该缓存 Popup disabled matcher，重复打开 Popup 时不重复扫描全部脚本", async () => {
+      const disabledScript = createMockScript({
+        uuid: "disabled-cached",
+        status: SCRIPT_STATUS_DISABLE,
+        metadata: {
+          match: ["https://www.example.com/*"],
+        },
+      });
+
+      mockScriptDAO.all.mockResolvedValue([disabledScript]);
+
+      const first = await runtime.getPopupPageScriptMatchingResultByUrl("https://www.example.com/path");
+      const second = await runtime.getPopupPageScriptMatchingResultByUrl("https://www.example.com/other");
+
+      expect(first.get(disabledScript.uuid)?.effective).toBe(true);
+      expect(second.get(disabledScript.uuid)?.effective).toBe(true);
+      expect(mockScriptDAO.all).toHaveBeenCalledTimes(1);
+    });
+
+    it("应该在 runtime cache 被清理后重建 Popup disabled matcher", async () => {
+      const oldDisabledScript = createMockScript({
+        uuid: "disabled-old",
+        status: SCRIPT_STATUS_DISABLE,
+        metadata: {
+          match: ["https://old.example.com/*"],
+        },
+      });
+      const newDisabledScript = createMockScript({
+        uuid: "disabled-new",
+        status: SCRIPT_STATUS_DISABLE,
+        metadata: {
+          match: ["https://new.example.com/*"],
+        },
+      });
+
+      mockScriptDAO.all.mockResolvedValueOnce([oldDisabledScript]).mockResolvedValueOnce([newDisabledScript]);
+
+      expect(
+        (await runtime.getPopupPageScriptMatchingResultByUrl("https://old.example.com/path")).has("disabled-old")
+      ).toBe(true);
+      runtime.deleteScriptRuntimeCache(oldDisabledScript.uuid);
+      const result = await runtime.getPopupPageScriptMatchingResultByUrl("https://new.example.com/path");
+
+      expect(result.has("disabled-old")).toBe(false);
+      expect(result.get("disabled-new")?.effective).toBe(true);
+      expect(mockScriptDAO.all).toHaveBeenCalledTimes(2);
     });
 
     it("应该合并 enabled matcher 与按需 disabled 匹配，并保留 effective / non-effective 状态", async () => {

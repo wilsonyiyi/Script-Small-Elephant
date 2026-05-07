@@ -117,6 +117,7 @@ export class RuntimeService {
   blackMatch: UrlMatch<string> = new UrlMatch<string>();
   private readonly codeCacheMap = new Map<string, TCodeCache>();
   public readonly pageLoadCaches = new Map<string, TPageLoadScriptCache>();
+  private popupDisabledScriptMatchCache: UrlMatch<string> | null = null;
 
   logger: Logger;
 
@@ -276,7 +277,10 @@ export class RuntimeService {
 
   createMatchInfoEntry(
     scriptRes: ScriptRunResource,
-    o: { scriptUrlPatterns: URLRuleEntry[]; originalUrlPatterns: URLRuleEntry[] | null }
+    o: {
+      scriptUrlPatterns: URLRuleEntry[];
+      originalUrlPatterns: URLRuleEntry[] | null;
+    }
   ) {
     // 优化性能，将不需要的信息去掉
     // 而且可能会超过缓存的存储限制
@@ -385,6 +389,11 @@ export class RuntimeService {
   deleteScriptRuntimeCache(uuid: string) {
     this.pageLoadCaches.delete(uuid);
     this.codeCacheMap.delete(uuid);
+    this.clearPopupDisabledScriptMatchCache();
+  }
+
+  private clearPopupDisabledScriptMatchCache() {
+    this.popupDisabledScriptMatchCache = null;
   }
 
   init() {
@@ -410,7 +419,7 @@ export class RuntimeService {
     this.mq.subscribe<TEnableScript[]>("enableScripts", async (data) => {
       const unregisteyUuids = [] as string[];
       for (const { uuid, enable } of data) {
-        this.pageLoadCaches.delete(uuid);
+        this.deleteScriptRuntimeCache(uuid);
         const script = await this.scriptDAO.get(uuid);
         if (!script) {
           this.logger.error("script enable failed, script not found", {
@@ -478,6 +487,7 @@ export class RuntimeService {
       const uuidSort = Object.fromEntries(scripts.map(({ uuid, sort }) => [uuid, sort]));
       this.scriptMatchEnable.setupSorter(uuidSort);
       this.scriptMatchDisable.setupSorter(uuidSort);
+      this.clearPopupDisabledScriptMatchCache();
     });
 
     // 监听offscreen环境初始化, 初始化完成后, 再将后台脚本运行起来
@@ -1073,10 +1083,26 @@ export class RuntimeService {
 
   async getPopupPageScriptMatchingResultByUrl(url: string) {
     const ret = this.getPageScriptMatchingResultByUrl(url, false, true);
+    const disabledMatch = await this.getPopupDisabledScriptMatch();
+
+    for (const e of disabledMatch.urlMatch(url)) {
+      const uuid = e.endsWith(ORIGINAL_URLMATCH_SUFFIX) ? e.slice(0, -ORIGINAL_URLMATCH_SUFFIX.length) : e;
+      const o = ret.get(uuid) || { uuid, effective: false };
+      if (e === uuid) {
+        o.effective = true;
+      }
+      ret.set(uuid, o);
+    }
+    return ret;
+  }
+
+  private async getPopupDisabledScriptMatch() {
+    if (this.popupDisabledScriptMatchCache) {
+      return this.popupDisabledScriptMatchCache;
+    }
     const disabledMatch = new UrlMatch<string>();
     const uuidSort: Record<string, number> = {};
     const scripts = await this.scriptDAO.all();
-
     for (const script of scripts) {
       if (script.type !== SCRIPT_TYPE_NORMAL || script.status !== SCRIPT_STATUS_DISABLE) {
         continue;
@@ -1097,15 +1123,8 @@ export class RuntimeService {
     }
 
     disabledMatch.setupSorter(uuidSort);
-    for (const e of disabledMatch.urlMatch(url)) {
-      const uuid = e.endsWith(ORIGINAL_URLMATCH_SUFFIX) ? e.slice(0, -ORIGINAL_URLMATCH_SUFFIX.length) : e;
-      const o = ret.get(uuid) || { uuid, effective: false };
-      if (e === uuid) {
-        o.effective = true;
-      }
-      ret.set(uuid, o);
-    }
-    return ret;
+    this.popupDisabledScriptMatchCache = disabledMatch;
+    return disabledMatch;
   }
 
   async updateSites() {
