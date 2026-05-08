@@ -61,6 +61,8 @@ const RuntimeRegisterCode = {
 
 type RuntimeRegisterCode = ValueOf<typeof RuntimeRegisterCode>;
 
+type RegisteredUserScriptWithJsCode = RequireField<chrome.userScripts.RegisteredUserScript, "js">;
+
 const runtimeGlobal = {
   registerState: RuntimeRegisterCode.UNSET,
   messageFlag: "PENDING",
@@ -851,7 +853,7 @@ export class RuntimeService {
           excludeGlobs: [...result.excludeGlobs, ...excludeGlobs],
           allFrames: result.allFrames,
           world: result.world,
-        } as chrome.userScripts.RegisteredUserScript;
+        } as RegisteredUserScriptWithJsCode;
         if (result.runAt) {
           registerScript.runAt = result.runAt as chrome.extensionTypes.RunAt;
         }
@@ -859,7 +861,7 @@ export class RuntimeService {
       })
     ).then(async (res) => {
       // 过滤掉undefined和未开启的
-      return res.filter((item) => item) as chrome.userScripts.RegisteredUserScript[];
+      return res.filter((item) => item) as RegisteredUserScriptWithJsCode[];
     });
     return registerScripts;
   }
@@ -892,7 +894,7 @@ export class RuntimeService {
     }
 
     let retContent: chrome.scripting.RegisteredContentScript[] = [];
-    const retInject: chrome.userScripts.RegisteredUserScript[] = [];
+    const retInject: RegisteredUserScriptWithJsCode[] = [];
 
     // ------ scripting.js ------
     // Note: Chrome does not support file.js?query
@@ -924,7 +926,7 @@ export class RuntimeService {
         excludeMatches: excludeMatches,
         excludeGlobs: excludeGlobs,
         world: "MAIN",
-      } satisfies chrome.userScripts.RegisteredUserScript;
+      } satisfies RegisteredUserScriptWithJsCode;
       retInject.push(script);
     }
     const contentJs = await this.getContentJsCode();
@@ -941,7 +943,7 @@ export class RuntimeService {
         excludeMatches,
         excludeGlobs,
         world: "USER_SCRIPT",
-      } satisfies chrome.userScripts.RegisteredUserScript;
+      } satisfies RegisteredUserScriptWithJsCode;
       retInject.push(script);
     }
 
@@ -985,7 +987,7 @@ export class RuntimeService {
     // 需要等getParticularScriptList完成后再执行
     const { inject: injectScriptList, content: contentScriptList } = await this.getContentAndInjectScript(options);
 
-    const list: chrome.userScripts.RegisteredUserScript[] = [...particularScriptList, ...injectScriptList];
+    const list: RegisteredUserScriptWithJsCode[] = [...particularScriptList, ...injectScriptList];
 
     let failed = false;
     try {
