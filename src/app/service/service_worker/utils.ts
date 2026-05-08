@@ -196,7 +196,7 @@ export function getUserScriptRegister(scriptMatchInfo: ScriptMatchInfo) {
     scriptMatchInfo.scriptUrlPatterns.filter((e) => e.ruleType === RuleType.GLOB_EXCLUDE)
   );
 
-  const registerScript: chrome.userScripts.RegisteredUserScript = {
+  const registerScript: RequireField<chrome.userScripts.RegisteredUserScript, "js"> = {
     id: scriptMatchInfo.uuid,
     js: [{ code: "" }],
     matches: matches, // primary
