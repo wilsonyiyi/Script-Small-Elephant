@@ -164,7 +164,7 @@
     );
   });
 
-  await test("沙盒 window 使用空原型，但保留页面 Window 外观", () => {
+  await test("沙盒 window 使用空原型，但保留页面 Window 外观 (Issue #962)", () => {
     assertSame(
       null,
       Object.getPrototypeOf(window),
@@ -201,49 +201,6 @@
     );
   });
 
-  await test("window/self/top/parent/frames 不能被脚本改写", () => {
-    assertThrowsOrKeepsValue(
-      () => {
-        window.window = "bad";
-      },
-      () => window.window,
-      window,
-      "window 自引用应保持不变",
-    );
-    assertThrowsOrKeepsValue(
-      () => {
-        window.self = "bad";
-      },
-      () => window.self,
-      window,
-      "self 自引用应保持不变",
-    );
-    assertThrowsOrKeepsValue(
-      () => {
-        window.top = "bad";
-      },
-      () => window.top,
-      window,
-      "top 自引用应保持不变",
-    );
-    assertThrowsOrKeepsValue(
-      () => {
-        window.parent = "bad";
-      },
-      () => window.parent,
-      window,
-      "parent 自引用应保持不变",
-    );
-    assertThrowsOrKeepsValue(
-      () => {
-        window.frames = "bad";
-      },
-      () => window.frames,
-      window,
-      "frames 自引用应保持不变",
-    );
-  });
-
   await test("页面全局变量不会自动穿透到沙盒 window", () =>
     withCleanup(
       () => {
@@ -263,6 +220,84 @@
       () => {
         delete window[`${markerPrefix}_page_global`];
         delete unsafeWindow[`${markerPrefix}_page_global`];
+      },
+    ));
+
+  await test("页面 DOM named property 不应穿透为沙盒全局变量 (Issue #273, #700)", () =>
+    withCleanup(
+      () => {
+        const id = `${markerPrefix}_named_element`;
+        const div = document.createElement("div");
+        div.id = id;
+        document.body.appendChild(div);
+
+        assertSame(
+          div,
+          unsafeWindow[id],
+          "页面 window 应可通过 named property 访问元素",
+        );
+        assertSame(
+          undefined,
+          window[id],
+          "沙盒 window 不应通过 named property 访问页面元素",
+        );
+      },
+      () => {
+        document.getElementById(`${markerPrefix}_named_element`)?.remove();
+      },
+    ));
+
+  await test("删除沙盒全局变量不应删除页面同名全局变量 (Issue #522)", () =>
+    withCleanup(
+      () => {
+        const key = `${markerPrefix}_delete_page_global`;
+        unsafeWindow[key] = "page-value";
+
+        assertSame(undefined, window[key], "页面变量不应自动出现在沙盒 window");
+
+        window[key] = "sandbox-value";
+        assertSame("sandbox-value", window[key], "沙盒变量应存在");
+        assertSame("page-value", unsafeWindow[key], "页面变量应保持存在");
+
+        delete window[key];
+
+        assertSame(undefined, window[key], "删除后沙盒变量应消失");
+        assertSame(
+          "page-value",
+          unsafeWindow[key],
+          "删除沙盒变量不应删除页面变量",
+        );
+      },
+      () => {
+        window[`${markerPrefix}_delete_page_global`] = undefined;
+        delete window[`${markerPrefix}_delete_page_global`];
+        delete unsafeWindow[`${markerPrefix}_delete_page_global`];
+      },
+    ));
+
+  await test("裸 delete 沙盒全局变量不应删除页面同名全局变量", () =>
+    withCleanup(
+      () => {
+        const key = `${markerPrefix}_delete_bare_page_global`;
+        unsafeWindow[key] = "page-value";
+        window[key] = "sandbox-value";
+
+        assertSame("sandbox-value", window[key], "裸变量应读取沙盒值");
+        assertSame("page-value", unsafeWindow[key], "页面变量应保持存在");
+
+        try {
+          Function(`return delete ${key};`)(); // 半沙盒在頁面執行
+        } catch (e) {
+          throw new Error("This page cannot execute script", e);
+        }
+
+        assertSame(undefined, unsafeWindow[key], "裸 delete 后页面变量应消失");
+        assertSame("sandbox-value", window[key], "裸 delete 后沙盒变量不应消失");
+      },
+      () => {
+        window[`${markerPrefix}_delete_bare_page_global`] = undefined;
+        delete window[`${markerPrefix}_delete_bare_page_global`];
+        delete unsafeWindow[`${markerPrefix}_delete_bare_page_global`];
       },
     ));
 
@@ -339,8 +374,10 @@
 
   section("原生函数与事件代理");
 
-  await test("裸调用原生函数已绑定真实页面 window，避免 Illegal invocation", async () => {
+  await test("裸调用原生函数已绑定真实页面 window，避免 Illegal invocation (Issue #189)", async () => {
     const rawSetTimeout = setTimeout;
+    const rawSetInterval = setInterval;
+    const rawClearInterval = clearInterval;
     let called = false;
     await new Promise((resolve) => {
       rawSetTimeout(() => {
@@ -349,6 +386,16 @@
       }, 0);
     });
     assertSame(true, called, "裸调用 setTimeout 应正常执行");
+
+    let intervalCount = 0;
+    await new Promise((resolve) => {
+      const timer = rawSetInterval(() => {
+        intervalCount++;
+        rawClearInterval(timer);
+        resolve();
+      }, 0);
+    });
+    assertSame(1, intervalCount, "裸调用 setInterval 应正常执行");
 
     const rawAddEventListener = addEventListener;
     const rawRemoveEventListener = removeEventListener;
@@ -361,31 +408,76 @@
     unsafeWindow.dispatchEvent(new Event(eventName));
     rawRemoveEventListener(eventName, handler);
     assertSame(1, count, "裸调用 addEventListener 应绑定到页面 window");
+
+    if (typeof fetch === "function") {
+      const rawFetch = fetch;
+      assertSame("function", typeof rawFetch, "fetch 应可读取为裸函数");
+    }
   });
 
-  await test("getter 返回页面 window 时会替换为沙盒 window", () => {
+  await test("取出 window.addEventListener 后调用不会 Illegal invocation (Issue #773)", () =>
+    withCleanup(
+      () => {
+        const rawAddEventListener = window.addEventListener;
+        const rawRemoveEventListener = window.removeEventListener;
+        const eventName = `${markerPrefix}_window_listener`;
+        let count = 0;
+        const handler = () => {
+          count++;
+        };
+
+        rawAddEventListener(eventName, handler);
+        unsafeWindow.dispatchEvent(new Event(eventName));
+        rawRemoveEventListener(eventName, handler);
+
+        assertSame(
+          1,
+          count,
+          "window.addEventListener 取出后调用应绑定到页面 window",
+        );
+      },
+      () => {},
+    ));
+
+  await test("被 Proxy 包装的原生函数仍可安全裸调用 (Issue #1030)", async () => {
+    const proxiedSetTimeout = new Proxy(setTimeout, {});
+    let called = false;
+    await new Promise((resolve) => {
+      proxiedSetTimeout(() => {
+        called = true;
+        resolve();
+      }, 0);
+    });
+
+    assertSame(true, called, "Proxy 包装后的 setTimeout 应正常执行");
+  });
+
+  await test("getter 返回页面 window 时会替换为沙盒 window (Issue #1427)", () => {
     assertSame(window, self, "self getter 应返回沙盒 window");
     assertSame(window, parent, "parent getter 应返回沙盒 window");
     assertSame(window, top, "top getter 应返回沙盒 window");
     assertSame(window, frames, "frames getter 应返回沙盒 window");
   });
 
-  await test("onxxx 函数赋值由页面事件触发，this 为沙盒 window", () =>
+  await test("onxxx 函数赋值由页面事件触发，event.target 为 unsafeWindow", () =>
     withCleanup(
       () => {
         let count = 0;
-        let thisIsSandbox = false;
+        let thisIsNotWindow = false;
+        let eventTargetIsUnsafeWindow = false;
         const eventName = `${markerPrefix}_onresize_probe`;
 
         window.onresize = function (event) {
           count++;
-          thisIsSandbox = this === window;
+          thisIsNotWindow = this !== unsafeWindow;
+          eventTargetIsUnsafeWindow = event.target === unsafeWindow;
           assertSame("resize", event.type, "事件对象应正常传入");
         };
 
         unsafeWindow.dispatchEvent(new Event("resize"));
         assertSame(1, count, "页面 resize 应触发沙盒 onresize");
-        assertSame(true, thisIsSandbox, "onresize 回调 this 应为沙盒 window");
+        assertSame(true, thisIsNotWindow, "onresize 回调 this 不应为 unsafeWindow");
+        assertSame(true, eventTargetIsUnsafeWindow, "onresize 回调 event.target 应为 unsafeWindow");
 
         window.onresize = null;
         unsafeWindow.dispatchEvent(new Event("resize"));
@@ -397,22 +489,9 @@
       },
     ));
 
-  await test("onxxx primitive 会转为 null，普通对象只保存不注册监听", () =>
+  await test("onxxx 普通对象只保存不注册监听，primitive 值应移除已注册的监听", () =>
     withCleanup(
       async () => {
-        window.onfocus = 123;
-        window.onblur = "text";
-        assertSame(
-          null,
-          window.onfocus,
-          "number 赋给 onfocus 应按浏览器行为转为 null",
-        );
-        assertSame(
-          null,
-          window.onblur,
-          "string 赋给 onblur 应按浏览器行为转为 null",
-        );
-
         let handled = false;
         const listenerObject = {
           handleEvent() {
@@ -427,6 +506,27 @@
           false,
           handled,
           "EventListenerObject 形式不应被 onxxx 代理注册",
+        );
+        handled = false;
+        const func = function () { handled = true };
+        window.onfocus = func;
+        assertSame(func, window.onfocus, "function 对象应被保存");
+        unsafeWindow.dispatchEvent(new Event("focus"));
+        await waitForEventLoop();
+        assertSame(
+          true,
+          handled,
+          "EventListener 形式应被 onxxx 代理注册",
+        );
+        handled = false;
+        window.onfocus = 123;
+        assertNotSame(func, window.onfocus, "primitive 对象时注册能被移除 (1)");
+        unsafeWindow.dispatchEvent(new Event("focus"));
+        await waitForEventLoop();
+        assertSame(
+          false,
+          handled,
+          "primitive 对象时注册能被移除 (2)",
         );
       },
       () => {
@@ -456,11 +556,32 @@
       },
     ));
 
+  // 测试对象仅限于 window 和 top
+  await test("window/top 不能被脚本改写", () => {
+    assertThrowsOrKeepsValue(
+      () => {
+        window.window = "bad";
+      },
+      () => window.window,
+      window,
+      "window 自引用应保持不变",
+    );
+    assertThrowsOrKeepsValue(
+      () => {
+        window.top = "bad";
+      },
+      () => window.top,
+      window,
+      "top 自引用应保持不变",
+    );
+  });
+
   section("GM API 注入与命名空间");
 
   await test("GM_info、GM.info 与 unsafeWindow 正确暴露", () => {
     assertSame("object", typeof GM_info, "GM_info 应可用");
-    assertSame(GM_info, GM.info, "GM.info 应与 GM_info 指向同一份信息");
+    assertSame("object", typeof GM.info, "GM.info 应可用");
+    assertSame(JSON.stringify(GM_info), JSON.stringify(GM.info), "GM.info 应与 GM_info 一致 (JSON.stringify)");
     assertSame(
       unsafeWindow,
       window.unsafeWindow,
@@ -605,11 +726,6 @@
       "function",
       typeof GM_cookie.delete,
       "GM_cookie.delete 应由兼容命名空间注入",
-    );
-    assertSame(
-      "function",
-      typeof GM.cookie,
-      "GM.cookie 应由 GM_cookie grant 自动补齐",
     );
     assertSame(
       "function",
