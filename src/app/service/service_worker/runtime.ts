@@ -1391,14 +1391,14 @@ export class RuntimeService {
       originalUrlPatterns: cache.originalUrlPatterns === null ? cache.scriptUrlPatterns : cache.originalUrlPatterns,
       code: "",
       value: {},
-      resource: cache.resource,
+      resource: this.cloneRuntimeResources(cache.resource),
       metadataStr: cache.metadataStr,
       userConfigStr: cache.userConfigStr,
       userConfig: cache.userConfig || undefined,
     } as ScriptLoadInfo & { scriptUrlPatterns: URLRuleEntry[] };
   }
 
-  private cloneRuntimeResource(resource: Resource) {
+  private cloneRuntimeResource(resource: Resource | TRuntimeResource) {
     const ret = { ...resource } as TRuntimeResource;
     // 删除base64以节省资源；如果有content就删除base64
     if (ret.content) {
@@ -1407,7 +1407,7 @@ export class RuntimeService {
     return ret;
   }
 
-  private cloneRuntimeResources(resources: Record<string, Resource>) {
+  private cloneRuntimeResources(resources: Record<string, Resource | TRuntimeResource>) {
     const ret = {} as Record<string, TRuntimeResource>;
     for (const [name, resource] of Object.entries(resources)) {
       ret[name] = this.cloneRuntimeResource(resource);

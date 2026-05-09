@@ -683,6 +683,55 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
       expect(updatedCode).not.toContain("console.log('old resource');");
       expect(runtime.pageLoadCaches.get(script.uuid)?.localResources[0].sha512).toBe("new-sha");
     });
+
+    it("应该支持命名 @resource file:/// 改变时更新缓存资源", async () => {
+      const resourceUrl = "file:///tmp/local.txt";
+      const script = createMockScript({
+        uuid: "local-named-resource-script",
+        metadata: {
+          match: ["https://www.example.com/*"],
+          resource: [`asset ${resourceUrl}`],
+        },
+        updatetime: 100,
+      });
+      const scriptRunResource = createScriptRunResource(script);
+      const compiledResource = await createCompiledResourceAsync(script, scriptRunResource);
+      runtime.compiledResourceDAO = {
+        gets: vi.fn().mockResolvedValue([compiledResource]),
+      } as any;
+      mockScriptDAO.gets.mockResolvedValue([script]);
+      mockScriptDAO.scriptCodeDAO.get.mockResolvedValue({
+        uuid: script.uuid,
+        code: createUserScriptCode(script, "console.log('with named local resource');"),
+      });
+      mockResourceService.getScriptResources.mockResolvedValue({
+        asset: { ...createTextResource(resourceUrl, "old text", "old-sha"), type: "resource" },
+      });
+      mockResourceService.updateResource.mockResolvedValue({
+        ...createTextResource(resourceUrl, "new text", "new-sha"),
+        type: "resource",
+      });
+      mockValueService.getScriptValue.mockResolvedValue({});
+
+      vi.spyOn(chrome.userScripts, "getScripts").mockResolvedValue([{ id: script.uuid, js: [{ code: "old" }] }] as any);
+      const update = vi.spyOn(chrome.userScripts, "update").mockResolvedValue(undefined);
+      update.mockClear();
+
+      const result = await runtime.getScriptsForTab({
+        url: "https://www.example.com/path",
+        tabId: 1,
+        frameId: 0,
+      });
+
+      expect(result?.injectScriptList[0].resource.asset.content).toBe("new text");
+      expect(runtime.pageLoadCaches.get(script.uuid)?.localResources[0]).toMatchObject({
+        resourceKey: "asset",
+        url: resourceUrl,
+        type: "resource",
+        sha512: "new-sha",
+      });
+      expect(update).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("getPopupPageScriptMatchingResultByUrl", () => {
