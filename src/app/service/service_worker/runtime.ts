@@ -53,6 +53,7 @@ import { setOnTabURLChanged } from "./url_monitor";
 import { scriptToMenu, type TPopupPageLoadInfo } from "./popup_scriptmenu";
 
 const ORIGINAL_URLMATCH_SUFFIX = "{ORIGINAL}"; // 用于标记原始URLPatterns的后缀
+let commonSorter: Record<string, number> = {};
 
 const RuntimeRegisterCode = {
   UNSET: 0,
@@ -319,6 +320,16 @@ export class RuntimeService {
     ]);
 
     const unregisterScriptIds = [] as string[];
+    const uuidSort = { ...commonSorter };
+    allScripts.map((script) => {
+      const { uuid, sort } = script;
+      const uuidOri = `${uuid}${ORIGINAL_URLMATCH_SUFFIX}`;
+      uuidSort[uuid] = sort;
+      uuidSort[uuidOri] = sort;
+    });
+    commonSorter = uuidSort;
+    this.scriptMatchEnable.setupSorter(commonSorter);
+    this.scriptMatchDisable?.setupSorter(commonSorter);
     // CompiledResourceNamespace 改变表示注册资料结构或注入代码可能已变。
     // 这个情况会把有效脚本跟 Inject/Content 脚本先取消注册，后续载入时再重新注册。
     const shouldCleanUpPreviousRegister = compiledResourceNamespace !== CompiledResourceNamespace;
@@ -350,6 +361,7 @@ export class RuntimeService {
 
           const { scriptUrlPatterns, originalUrlPatterns } = compiledResource;
           const uuidOri = `${uuid}${ORIGINAL_URLMATCH_SUFFIX}`;
+
           // 添加新的数据
           const scriptMatch = this.scriptMatchEnable;
           scriptMatch.addRules(uuid, scriptUrlPatterns);
@@ -531,10 +543,13 @@ export class RuntimeService {
       for (const { uuid } of data) {
         unregisteyUuids.push(uuid);
         this.deleteScriptRuntimeCache(uuid);
+        const uuidOri = `${uuid}${ORIGINAL_URLMATCH_SUFFIX}`;
+        delete commonSorter[uuid];
+        delete commonSorter[uuidOri];
         this.scriptMatchEnable.clearRules(uuid);
-        this.scriptMatchEnable.clearRules(`${uuid}${ORIGINAL_URLMATCH_SUFFIX}`);
+        this.scriptMatchEnable.clearRules(uuidOri);
         this.scriptMatchDisable?.clearRules(uuid);
-        this.scriptMatchDisable?.clearRules(`${uuid}${ORIGINAL_URLMATCH_SUFFIX}`);
+        this.scriptMatchDisable?.clearRules(uuidOri);
       }
       await this.unregistryPageScripts(unregisteyUuids);
     });
@@ -548,8 +563,9 @@ export class RuntimeService {
         uuidSort[uuid] = sort;
         uuidSort[uuidOri] = sort;
       }
-      this.scriptMatchEnable.setupSorter(uuidSort);
-      this.scriptMatchDisable?.setupSorter(uuidSort);
+      commonSorter = { ...commonSorter, ...uuidSort };
+      this.scriptMatchEnable.setupSorter(commonSorter);
+      this.scriptMatchDisable?.setupSorter(commonSorter);
     });
 
     // 监听offscreen环境初始化, 初始化完成后, 再将后台脚本运行起来
@@ -1168,8 +1184,9 @@ export class RuntimeService {
         disabledMatch.addRules(uuidOri, patterns.originalUrlPatterns);
       }
     }
-
-    disabledMatch.setupSorter(uuidSort);
+    commonSorter = { ...commonSorter, ...uuidSort };
+    this.scriptMatchEnable.setupSorter(commonSorter);
+    disabledMatch.setupSorter(commonSorter);
     return disabledMatch;
   }
 
