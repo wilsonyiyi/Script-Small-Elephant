@@ -64,34 +64,6 @@ type RuntimeRegisterCode = ValueOf<typeof RuntimeRegisterCode>;
 
 type RegisteredUserScriptWithJsCode = any;
 
-const runtimeGlobal = {
-  registerState: RuntimeRegisterCode.UNSET,
-  messageFlag: "PENDING",
-} as {
-  registerState: RuntimeRegisterCode;
-  messageFlag: string;
-};
-
-const bgScriptStorageNames = new Set<string>();
-
-// For Firefox, StorageArea.setAccessLevel is not implemented.
-// See https://bugzilla.mozilla.org/show_bug.cgi?id=1724754
-// const deliveryStorage = isFirefox() ? chrome.storage.local : chrome.storage.session;
-const deliveryStorage = chrome.storage.local; // 日后再处理
-
-export type TTabInfo = {
-  url: string;
-  tabId: number | undefined;
-  frameId: number | undefined;
-};
-
-export type TScriptsForTab = {
-  injectScriptList: TScriptInfo[];
-  contentScriptList: TScriptInfo[];
-  envInfo: GMInfoEnv;
-  scriptmenus: ScriptMenu[];
-} | null;
-
 type TCodeCache = {
   code: string;
   metadataStr: string;
@@ -120,6 +92,34 @@ type TPageLoadScriptCache = {
   resource: Record<string, TRuntimeResource>;
   localResources: TLocalResourceCache[];
 };
+
+const runtimeGlobal = {
+  registerState: RuntimeRegisterCode.UNSET,
+  messageFlag: "PENDING",
+} as {
+  registerState: RuntimeRegisterCode;
+  messageFlag: string;
+};
+
+export type TTabInfo = {
+  url: string;
+  tabId: number | undefined;
+  frameId: number | undefined;
+};
+
+export type TScriptsForTab = {
+  injectScriptList: TScriptInfo[];
+  contentScriptList: TScriptInfo[];
+  envInfo: GMInfoEnv;
+  scriptmenus: ScriptMenu[];
+} | null;
+
+const bgScriptStorageNames = new Set<string>();
+
+// For Firefox, StorageArea.setAccessLevel is not implemented.
+// See https://bugzilla.mozilla.org/show_bug.cgi?id=1724754
+// const deliveryStorage = isFirefox() ? chrome.storage.local : chrome.storage.session;
+const deliveryStorage = chrome.storage.local; // 日后再处理
 
 export class RuntimeService {
   scriptMatchEnable: UrlMatch<string> = new UrlMatch<string>();
@@ -315,7 +315,7 @@ export class RuntimeService {
     const unregisterScriptIds = [] as string[];
     // CompiledResourceNamespace 改变表示注册资料结构或注入代码可能已变。
     // 这个情况会把有效脚本跟 Inject/Content 脚本先取消注册，后续载入时再重新注册。
-    const cleanUpPreviousRegister = compiledResourceNamespace !== CompiledResourceNamespace;
+    const shouldCleanUpPreviousRegister = compiledResourceNamespace !== CompiledResourceNamespace;
     this.initialCompiledResourcePromise = Promise.all(
       allScripts.map(async (script) => {
         const uuid = script.uuid;
@@ -325,7 +325,7 @@ export class RuntimeService {
         if (!isNormalScript || !enable) {
           // 确保浏览器没有残留 PageScripts
           if (uuid) unregisterScriptIds.push(uuid);
-        } else if (cleanUpPreviousRegister) {
+        } else if (shouldCleanUpPreviousRegister) {
           // CompiledResourceNamespace 修改后先反注册残留脚本，之后再重新加载 PageScripts
           if (uuid) unregisterScriptIds.push(uuid);
         }
@@ -353,7 +353,7 @@ export class RuntimeService {
         }
       })
     );
-    if (cleanUpPreviousRegister) {
+    if (shouldCleanUpPreviousRegister) {
       // 先反注册残留脚本
       unregisterScriptIds.push(
         // 兼容旧的注册ID，过渡期后可移除
@@ -369,7 +369,7 @@ export class RuntimeService {
     if (!cRuntimeStartFlag) {
       await cacheInstance.set<boolean>("runtimeStartFlag", true);
     }
-    if (cleanUpPreviousRegister) {
+    if (shouldCleanUpPreviousRegister) {
       await cacheInstance.set<string>("compiledResourceNamespace", CompiledResourceNamespace);
     }
 
@@ -399,10 +399,6 @@ export class RuntimeService {
   deleteScriptRuntimeCache(uuid: string) {
     this.pageLoadCaches.delete(uuid);
     this.codeCacheMap.delete(uuid);
-    this.clearPopupDisabledScriptMatchCache();
-  }
-
-  private clearPopupDisabledScriptMatchCache() {
     this.popupDisabledScriptMatchCache = null;
   }
 
@@ -537,10 +533,16 @@ export class RuntimeService {
 
     // 监听脚本排序
     this.mq.subscribe<TSortedScript[]>("sortedScripts", async (scripts) => {
-      const uuidSort = Object.fromEntries(scripts.map(({ uuid, sort }) => [uuid, sort]));
+      const uuidSort: Record<string, number> = {};
+      for (const script of scripts) {
+        const { uuid, sort } = script;
+        const uuidOri = `${uuid}${ORIGINAL_URLMATCH_SUFFIX}`;
+        uuidSort[uuid] = sort;
+        uuidSort[uuidOri] = sort;
+      }
       this.scriptMatchEnable.setupSorter(uuidSort);
       this.scriptMatchDisable.setupSorter(uuidSort);
-      this.clearPopupDisabledScriptMatchCache();
+      this.popupDisabledScriptMatchCache?.setupSorter(uuidSort);
     });
 
     // 监听offscreen环境初始化, 初始化完成后, 再将后台脚本运行起来
@@ -1081,6 +1083,25 @@ export class RuntimeService {
     );
   }
 
+  getPageScriptMatchingResultByUrlInner(
+    ret: Map<string, { uuid: string; effective: boolean }>,
+    matchedUuids: string[],
+    includeNonEffective: boolean = false
+  ) {
+    for (const e of matchedUuids) {
+      const isEffective = !e.endsWith(ORIGINAL_URLMATCH_SUFFIX);
+      const uuid = isEffective ? e : e.slice(0, -ORIGINAL_URLMATCH_SUFFIX.length);
+      if (!includeNonEffective && !isEffective) continue;
+      const o = ret.get(uuid) || { uuid, effective: false };
+      // 只包含 uuid{Ori} 而不包含 uuid 的情况，effective = false
+      if (isEffective) {
+        o.effective = true;
+      }
+      // ret 只包含 uuid 为键的 matchingResult
+      ret.set(uuid, o);
+    }
+  }
+
   getPageScriptMatchingResultByUrl(
     url: string,
     includeDisabled: boolean = false,
@@ -1093,40 +1114,22 @@ export class RuntimeService {
     if (includeDisabled) {
       matchedUuids = [...matchedUuids, ...this.scriptMatchDisable.urlMatch(url!)];
     }
+
     const ret = new Map<string, { uuid: string; effective: boolean }>();
-    for (const e of matchedUuids) {
-      const uuid = e.endsWith(ORIGINAL_URLMATCH_SUFFIX) ? e.slice(0, -ORIGINAL_URLMATCH_SUFFIX.length) : e;
-      if (!includeNonEffective && uuid !== e) continue;
-      const o = ret.get(uuid) || { uuid, effective: false };
-      // 只包含 uuid{Ori} 而不包含 uuid 的情况，effective = false
-      if (e === uuid) {
-        o.effective = true;
-      }
-      ret.set(uuid, o);
-    }
-    // ret 只包含 uuid 为键的 matchingResult
+    this.getPageScriptMatchingResultByUrlInner(ret, matchedUuids, includeNonEffective);
     return ret;
   }
 
   async getPopupPageScriptMatchingResultByUrl(url: string) {
     const ret = this.getPageScriptMatchingResultByUrl(url, false, true);
-    const disabledMatch = await this.getPopupDisabledScriptMatch();
-
-    for (const e of disabledMatch.urlMatch(url)) {
-      const uuid = e.endsWith(ORIGINAL_URLMATCH_SUFFIX) ? e.slice(0, -ORIGINAL_URLMATCH_SUFFIX.length) : e;
-      const o = ret.get(uuid) || { uuid, effective: false };
-      if (e === uuid) {
-        o.effective = true;
-      }
-      ret.set(uuid, o);
-    }
+    const disabledMatch =
+      this.popupDisabledScriptMatchCache ||
+      (this.popupDisabledScriptMatchCache = await this.createPopupDisabledScriptMatch());
+    this.getPageScriptMatchingResultByUrlInner(ret, disabledMatch.urlMatch(url), true);
     return ret;
   }
 
-  private async getPopupDisabledScriptMatch() {
-    if (this.popupDisabledScriptMatchCache) {
-      return this.popupDisabledScriptMatchCache;
-    }
+  private async createPopupDisabledScriptMatch(): Promise<UrlMatch<string>> {
     const disabledMatch = new UrlMatch<string>();
     const uuidSort: Record<string, number> = {};
     const scripts = await this.scriptDAO.all();
@@ -1134,15 +1137,16 @@ export class RuntimeService {
       if (script.type !== SCRIPT_TYPE_NORMAL || script.status !== SCRIPT_STATUS_DISABLE) {
         continue;
       }
+      // 前台 UserScript 腳本 並 已停用
 
       const scriptRes = buildScriptRunResourceBasic(script);
       const patterns = scriptURLPatternResults(scriptRes);
       if (!patterns) continue;
 
-      const uuid = script.uuid;
+      const { uuid, sort } = script;
       const uuidOri = `${uuid}${ORIGINAL_URLMATCH_SUFFIX}`;
-      uuidSort[uuid] = script.sort;
-      uuidSort[uuidOri] = script.sort;
+      uuidSort[uuid] = sort;
+      uuidSort[uuidOri] = sort;
       disabledMatch.addRules(uuid, patterns.scriptUrlPatterns);
       if (patterns.originalUrlPatterns !== patterns.scriptUrlPatterns) {
         disabledMatch.addRules(uuidOri, patterns.originalUrlPatterns);
@@ -1150,7 +1154,6 @@ export class RuntimeService {
     }
 
     disabledMatch.setupSorter(uuidSort);
-    this.popupDisabledScriptMatchCache = disabledMatch;
     return disabledMatch;
   }
 
@@ -1225,9 +1228,9 @@ export class RuntimeService {
     // 该网址没有任何脚本匹配，包括排除匹配
     if (!matchingResult.size) return null;
 
-    const uuids = [...matchingResult.keys()];
+    const matchingUuids = [...matchingResult.keys()];
     const enableScriptListByIndex = new Array<(ScriptLoadInfo & { scriptUrlPatterns: URLRuleEntry[] }) | undefined>(
-      uuids.length
+      matchingUuids.length
     );
     const cacheMisses = [] as {
       index: number;
@@ -1236,23 +1239,23 @@ export class RuntimeService {
       scriptCacheKey: string;
     }[];
 
-    const scripts = await this.scriptDAO.gets(uuids);
+    const matchingScripts = await this.scriptDAO.gets(matchingUuids);
 
-    for (let idx = 0, l = uuids.length; idx < l; idx++) {
-      const script = scripts[idx];
-      if (!script) continue;
+    for (let idx = 0, l = matchingUuids.length; idx < l; idx++) {
+      const matchingScript = matchingScripts[idx];
+      if (!matchingScript) continue;
 
-      const scriptRes = buildScriptRunResourceBasic(script);
+      const scriptRes = buildScriptRunResourceBasic(matchingScript);
       if (this.shouldSkipPageLoadScript(scriptRes, frameId)) {
         continue;
       }
 
       const scriptCacheKey = this.getPageLoadScriptCacheKey(scriptRes);
-      const cache = this.getPageLoadScriptCache(script.uuid, scriptCacheKey);
+      const cache = this.getPageLoadScriptCache(matchingScript.uuid, scriptCacheKey);
       if (cache) {
         enableScriptListByIndex[idx] = this.createPageLoadScriptInfo(scriptRes, cache);
       } else {
-        cacheMisses.push({ index: idx, script, scriptRes, scriptCacheKey });
+        cacheMisses.push({ index: idx, script: matchingScript, scriptRes, scriptCacheKey });
       }
     }
 
@@ -1385,14 +1388,13 @@ export class RuntimeService {
   }
 
   private getPageLoadScriptCacheKey(scriptRes: ScriptRunResource) {
-    return JSON.stringify({
-      metadata: scriptRes.metadata,
-      originalMetadata: scriptRes.originalMetadata,
-      selfMetadata: scriptRes.selfMetadata || {},
-      status: scriptRes.status,
-      type: scriptRes.type,
-      updatetime: scriptRes.updatetime || 0,
-    });
+    const { status, type, updatetime, metadata, originalMetadata, selfMetadata } = scriptRes;
+    const objectKeys = {
+      metadata: metadata,
+      originalMetadata: originalMetadata,
+      selfMetadata: selfMetadata || {},
+    };
+    return `${status}:${type}:${updatetime || 0}~${JSON.stringify(objectKeys)}`;
   }
 
   private getScriptCodeCacheKey(script: Script) {
