@@ -406,7 +406,6 @@ export class RuntimeService {
     this.pageLoadCaches.delete(uuid);
     this.codeCacheMap.delete(uuid);
     this.cachedPatterns.delete(uuid);
-    this.scriptMatchDisable = null;
   }
 
   public async pushValueUpdate(script: Script, sendData: ValueUpdateDataEncoded) {
@@ -472,6 +471,7 @@ export class RuntimeService {
     // 监听脚本开启
     this.mq.subscribe<TEnableScript[]>("enableScripts", async (data) => {
       const unregisteyUuids = [] as string[];
+      this.scriptMatchDisable = null;
       for (const { uuid, enable } of data) {
         this.deleteScriptRuntimeCache(uuid);
         const script = await this.scriptDAO.get(uuid);
@@ -505,6 +505,7 @@ export class RuntimeService {
 
     // 监听脚本安装
     this.mq.subscribe<TInstallScript>("installScript", async (data) => {
+      this.scriptMatchDisable = null;
       this.deleteScriptRuntimeCache(data.script.uuid);
       const script = await this.scriptDAO.get(data.script.uuid);
       if (!script) {
@@ -1627,6 +1628,7 @@ export class RuntimeService {
     if (!o) {
       return undefined;
     }
+    this.cachedPatterns.set(scriptRes.uuid, o);
     // 构建脚本匹配信息
     return this.scriptMatchEntry(scriptRes, o);
   }
