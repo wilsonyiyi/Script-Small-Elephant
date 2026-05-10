@@ -48,6 +48,11 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
     };
   };
 
+  const updateMockScripts = async (scripts: Script[]) => {
+    mockScriptDAO.all.mockResolvedValue(scripts);
+    runtime.scriptMatchDisable = await runtime.createPopupDisabledScriptMatch();
+  };
+
   // 测试数据创建工具函数
   const createMockScript = (overrides: Partial<Script> = {}): Script => ({
     uuid: randomUUID(),
@@ -206,7 +211,7 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
       // Act
       const scriptMatchInfo = await runtime.applyScriptMatchInfo(scriptRunResource);
       expect(scriptMatchInfo).toBeDefined();
-      const result = runtime.getPageScriptMatchingResultByUrl("https://www.example.com/path");
+      const result = runtime.getPageScriptMatchingResultByUrlInternal("https://www.example.com/path");
 
       // Assert
       // expect(mockScriptService.buildScriptRunResource).toHaveBeenCalledWith(script);
@@ -228,6 +233,8 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
         },
       });
 
+      await updateMockScripts([script]);
+
       const scriptRunResource = createScriptRunResource(script);
       mockScriptService.buildScriptRunResource.mockReturnValue(scriptRunResource);
 
@@ -236,10 +243,10 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
       expect(scriptMatchInfo).toBeDefined();
 
       // 测试默认查询（不包含无效匹配）
-      const defaultResult = runtime.getPageScriptMatchingResultByUrl("https://www.example.com/path");
+      const defaultResult = runtime.getPageScriptMatchingResultByUrlInternal("https://www.example.com/path");
 
       // 测试包含无效匹配的查询
-      const allResult = runtime.getPageScriptMatchingResultByUrl("https://www.example.com/path", true, true);
+      const allResult = runtime.getPageScriptMatchingResultByUrlInternal("https://www.example.com/path", true, true);
 
       // Assert
       // expect(mockScriptService.buildScriptRunResource).toHaveBeenCalledWith(script);
@@ -264,6 +271,7 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
           include: ["*://*/api/*"],
         },
       });
+      await updateMockScripts([script]);
 
       const scriptRunResource = createScriptRunResource(script);
       mockScriptService.buildScriptRunResource.mockReturnValue(scriptRunResource);
@@ -273,13 +281,13 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
       expect(scriptMatchInfo).toBeDefined();
 
       // 测试匹配第一个规则
-      const result1 = runtime.getPageScriptMatchingResultByUrl("https://www.example.com/path");
+      const result1 = runtime.getPageScriptMatchingResultByUrlInternal("https://www.example.com/path");
       // 测试匹配第二个规则
-      const result2 = runtime.getPageScriptMatchingResultByUrl("https://www.test.com/page");
+      const result2 = runtime.getPageScriptMatchingResultByUrlInternal("https://www.test.com/page");
       // 测试匹配include规则
-      const result3 = runtime.getPageScriptMatchingResultByUrl("https://example.org/api/users");
+      const result3 = runtime.getPageScriptMatchingResultByUrlInternal("https://example.org/api/users");
       // 测试不匹配的URL
-      const result4 = runtime.getPageScriptMatchingResultByUrl("https://other.com/page");
+      const result4 = runtime.getPageScriptMatchingResultByUrlInternal("https://other.com/page");
 
       // Assert
       expect(result1.has(script.uuid)).toBe(true);
@@ -304,6 +312,7 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
           exclude: ["*://www.example.com/admin/*"],
         },
       });
+      await updateMockScripts([script]);
 
       const scriptRunResource = createScriptRunResource(script);
       mockScriptService.buildScriptRunResource.mockReturnValue(scriptRunResource);
@@ -313,11 +322,11 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
       expect(scriptMatchInfo).toBeDefined();
 
       // 测试被include但不被exclude的URL
-      const includeResult = runtime.getPageScriptMatchingResultByUrl("https://www.example.com/user");
+      const includeResult = runtime.getPageScriptMatchingResultByUrlInternal("https://www.example.com/user");
       // 测试被include但也被exclude的URL
-      const excludeResult = runtime.getPageScriptMatchingResultByUrl("https://www.example.com/admin/panel");
+      const excludeResult = runtime.getPageScriptMatchingResultByUrlInternal("https://www.example.com/admin/panel");
       // 测试被include但也被exclude的URL（包含无效匹配）
-      const excludeAllResult = runtime.getPageScriptMatchingResultByUrl(
+      const excludeAllResult = runtime.getPageScriptMatchingResultByUrlInternal(
         "https://www.example.com/admin/panel",
         true,
         true
@@ -351,6 +360,7 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
       const script = createMockScript({
         metadata: {},
       });
+      await updateMockScripts([script]);
 
       const scriptRunResource = createScriptRunResource(script);
       mockScriptService.buildScriptRunResource.mockReturnValue(scriptRunResource);
@@ -358,7 +368,7 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
       // Act
       const scriptMatchInfo = await runtime.applyScriptMatchInfo(scriptRunResource);
       expect(scriptMatchInfo).toBeUndefined();
-      const result = runtime.getPageScriptMatchingResultByUrl("https://www.example.com/path");
+      const result = runtime.getPageScriptMatchingResultByUrlInternal("https://www.example.com/path");
 
       // Assert
       expect(result.has(script.uuid)).toBe(false);
@@ -384,6 +394,9 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
         status: SCRIPT_STATUS_DISABLE,
       });
 
+      await updateMockScripts([disabledScript, disabledScript]);
+      runtime.scriptMatchDisable = await runtime.createPopupDisabledScriptMatch();
+
       const enabledRunResource = createScriptRunResource(enabledScript);
       const disabledRunResource = createScriptRunResource(disabledScript);
 
@@ -400,9 +413,9 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
       expect(disabledMatchInfo).toBeDefined();
 
       // 默认查询（不包含禁用）
-      const defaultResult = runtime.getPageScriptMatchingResultByUrl("https://www.example.com/path");
+      const defaultResult = runtime.getPageScriptMatchingResultByUrlInternal("https://www.example.com/path");
       // 包含禁用脚本的查询
-      const withDisabledResult = runtime.getPageScriptMatchingResultByUrl("https://www.example.com/path", true);
+      const withDisabledResult = runtime.getPageScriptMatchingResultByUrlInternal("https://www.example.com/path", true);
 
       // Assert
       // 默认不包含禁用脚本
@@ -429,6 +442,7 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
         },
         updatetime: 100,
       });
+      await updateMockScripts([script]);
       const scriptRunResource = createScriptRunResource(script);
       const matchInfo = await runtime.applyScriptMatchInfo(scriptRunResource);
       expect(matchInfo).toBeDefined();
@@ -556,6 +570,7 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
       });
 
       const scripts = [injectScript, contentScript, noframesScript, incognitoOnlyScript];
+      await updateMockScripts(scripts);
       const runResources = scripts.map(createScriptRunResource);
       const compiledResources = await Promise.all(
         scripts.map((script, index) => createCompiledResourceAsync(script, runResources[index]))
@@ -590,6 +605,7 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
         },
         updatetime: 100,
       });
+      await updateMockScripts([oldScript]);
       const newScript = {
         ...oldScript,
         updatetime: 200,
@@ -645,6 +661,7 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
         },
         updatetime: 100,
       });
+      await updateMockScripts([script]);
       const scriptRunResource = createScriptRunResource(script);
       const compiledResource = await createCompiledResourceAsync(script, scriptRunResource);
       runtime.compiledResourceDAO = {
@@ -694,6 +711,7 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
         },
         updatetime: 100,
       });
+      await updateMockScripts([script]);
       const scriptRunResource = createScriptRunResource(script);
       const compiledResource = await createCompiledResourceAsync(script, scriptRunResource);
       runtime.compiledResourceDAO = {
@@ -756,8 +774,8 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
         },
       });
 
-      mockScriptDAO.all.mockResolvedValue([disabledScript, disabledExcludedScript]);
-      expect(runtime.getPageScriptMatchingResultByUrl("https://www.example.com/path", true, true).size).toBe(0);
+      await updateMockScripts([disabledScript, disabledExcludedScript]);
+      expect(runtime.getPageScriptMatchingResultByUrlInternal("https://www.example.com/path", true, true).size).toBe(2);
 
       const result = await runtime.getPopupPageScriptMatchingResultByUrl("https://www.example.com/path");
 
@@ -769,7 +787,7 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
         uuid: disabledExcludedScript.uuid,
         effective: false,
       });
-      expect(runtime.getPageScriptMatchingResultByUrl("https://www.example.com/path", true, true).size).toBe(0);
+      expect(runtime.getPageScriptMatchingResultByUrlInternal("https://www.example.com/path", true, true).size).toBe(2);
       expect(runtime.pageLoadCaches.size).toBe(0);
     });
 
@@ -782,7 +800,7 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
         },
       });
 
-      mockScriptDAO.all.mockResolvedValue([disabledScript]);
+      await updateMockScripts([disabledScript]);
 
       const first = await runtime.getPopupPageScriptMatchingResultByUrl("https://www.example.com/path");
       const second = await runtime.getPopupPageScriptMatchingResultByUrl("https://www.example.com/other");
@@ -800,6 +818,15 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
           match: ["https://old.example.com/*"],
         },
       });
+
+      await updateMockScripts([oldDisabledScript]);
+      const result1 = await runtime.getPopupPageScriptMatchingResultByUrl("https://old.example.com/path");
+      expect(result1.has("disabled-old")).toBe(true);
+      expect(result1.has("disabled-new")).toBe(false);
+      expect(mockScriptDAO.all).toHaveBeenCalledTimes(1);
+
+      runtime.deleteScriptRuntimeCache(oldDisabledScript.uuid);
+
       const newDisabledScript = createMockScript({
         uuid: "disabled-new",
         status: SCRIPT_STATUS_DISABLE,
@@ -808,16 +835,12 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
         },
       });
 
-      mockScriptDAO.all.mockResolvedValueOnce([oldDisabledScript]).mockResolvedValueOnce([newDisabledScript]);
+      await updateMockScripts([newDisabledScript]);
+      const result2 = await runtime.getPopupPageScriptMatchingResultByUrl("https://new.example.com/path");
 
-      expect(
-        (await runtime.getPopupPageScriptMatchingResultByUrl("https://old.example.com/path")).has("disabled-old")
-      ).toBe(true);
-      runtime.deleteScriptRuntimeCache(oldDisabledScript.uuid);
-      const result = await runtime.getPopupPageScriptMatchingResultByUrl("https://new.example.com/path");
-
-      expect(result.has("disabled-old")).toBe(false);
-      expect(result.get("disabled-new")?.effective).toBe(true);
+      expect(result2.has("disabled-old")).toBe(false);
+      expect(result2.has("disabled-new")).toBe(true);
+      expect(result2.get("disabled-new")?.effective).toBe(true);
       expect(mockScriptDAO.all).toHaveBeenCalledTimes(2);
     });
 
@@ -850,7 +873,7 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
 
       await runtime.applyScriptMatchInfo(createScriptRunResource(enabledScript));
       await runtime.applyScriptMatchInfo(createScriptRunResource(enabledExcludedScript));
-      mockScriptDAO.all.mockResolvedValue([enabledScript, enabledExcludedScript, disabledScript]);
+      await updateMockScripts([enabledScript, enabledExcludedScript, disabledScript]);
 
       const result = await runtime.getPopupPageScriptMatchingResultByUrl("https://www.example.com/path");
 
@@ -889,12 +912,7 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
         },
       });
 
-      mockScriptDAO.all.mockResolvedValue([
-        backgroundScript,
-        enabledScriptNotInMatcher,
-        disabledWithoutRules,
-        disabledMatched,
-      ]);
+      await updateMockScripts([backgroundScript, enabledScriptNotInMatcher, disabledWithoutRules, disabledMatched]);
 
       const result = await runtime.getPopupPageScriptMatchingResultByUrl("https://www.example.com/path");
 
@@ -920,7 +938,7 @@ describe("RuntimeService - getPageScriptMatchingResultByUrl 脚本匹配", () =>
         },
       });
 
-      mockScriptDAO.all.mockResolvedValue([laterScript, earlierScript]);
+      await updateMockScripts([laterScript, earlierScript]);
 
       const result = await runtime.getPopupPageScriptMatchingResultByUrl("https://www.example.com/path");
 

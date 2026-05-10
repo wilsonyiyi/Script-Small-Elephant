@@ -123,11 +123,17 @@ const deliveryStorage = chrome.storage.local; // 日后再处理
 
 export class RuntimeService {
   scriptMatchEnable: UrlMatch<string> = new UrlMatch<string>();
-  scriptMatchDisable: UrlMatch<string> = new UrlMatch<string>();
+  scriptMatchDisable: UrlMatch<string> | null = null;
   blackMatch: UrlMatch<string> = new UrlMatch<string>();
   private readonly codeCacheMap = new Map<string, TCodeCache>();
   public readonly pageLoadCaches = new Map<string, TPageLoadScriptCache>();
-  private popupDisabledScriptMatchCache: UrlMatch<string> | null = null;
+  private readonly cachedPatterns = new Map<
+    string,
+    {
+      scriptUrlPatterns: URLRuleEntry[];
+      originalUrlPatterns: URLRuleEntry[];
+    }
+  >();
 
   logger: Logger;
 
@@ -345,7 +351,7 @@ export class RuntimeService {
           const { scriptUrlPatterns, originalUrlPatterns } = compiledResource;
           const uuidOri = `${uuid}${ORIGINAL_URLMATCH_SUFFIX}`;
           // 添加新的数据
-          const scriptMatch = enable ? this.scriptMatchEnable : this.scriptMatchDisable;
+          const scriptMatch = this.scriptMatchEnable;
           scriptMatch.addRules(uuid, scriptUrlPatterns);
           if (originalUrlPatterns !== null && originalUrlPatterns !== scriptUrlPatterns) {
             scriptMatch.addRules(uuidOri, originalUrlPatterns);
@@ -399,7 +405,8 @@ export class RuntimeService {
   deleteScriptRuntimeCache(uuid: string) {
     this.pageLoadCaches.delete(uuid);
     this.codeCacheMap.delete(uuid);
-    this.popupDisabledScriptMatchCache = null;
+    this.cachedPatterns.delete(uuid);
+    this.scriptMatchDisable = null;
   }
 
   public async pushValueUpdate(script: Script, sendData: ValueUpdateDataEncoded) {
@@ -525,8 +532,8 @@ export class RuntimeService {
         this.deleteScriptRuntimeCache(uuid);
         this.scriptMatchEnable.clearRules(uuid);
         this.scriptMatchEnable.clearRules(`${uuid}${ORIGINAL_URLMATCH_SUFFIX}`);
-        this.scriptMatchDisable.clearRules(uuid);
-        this.scriptMatchDisable.clearRules(`${uuid}${ORIGINAL_URLMATCH_SUFFIX}`);
+        this.scriptMatchDisable?.clearRules(uuid);
+        this.scriptMatchDisable?.clearRules(`${uuid}${ORIGINAL_URLMATCH_SUFFIX}`);
       }
       await this.unregistryPageScripts(unregisteyUuids);
     });
@@ -541,8 +548,7 @@ export class RuntimeService {
         uuidSort[uuidOri] = sort;
       }
       this.scriptMatchEnable.setupSorter(uuidSort);
-      this.scriptMatchDisable.setupSorter(uuidSort);
-      this.popupDisabledScriptMatchCache?.setupSorter(uuidSort);
+      this.scriptMatchDisable?.setupSorter(uuidSort);
     });
 
     // 监听offscreen环境初始化, 初始化完成后, 再将后台脚本运行起来
@@ -1083,7 +1089,7 @@ export class RuntimeService {
     );
   }
 
-  getPageScriptMatchingResultByUrlInner(
+  private processScriptMatchingRet(
     ret: Map<string, { uuid: string; effective: boolean }>,
     matchedUuids: string[],
     includeNonEffective: boolean = false
@@ -1102,7 +1108,7 @@ export class RuntimeService {
     }
   }
 
-  getPageScriptMatchingResultByUrl(
+  getPageScriptMatchingResultByUrlInternal(
     url: string,
     includeDisabled: boolean = false,
     includeNonEffective: boolean = false
@@ -1112,24 +1118,28 @@ export class RuntimeService {
     // 因此基于自定义排除页面被排除的情况下，结果只包含 uuid{Ori} 而不包含 uuid
     let matchedUuids = this.scriptMatchEnable.urlMatch(url!);
     if (includeDisabled) {
-      matchedUuids = [...matchedUuids, ...this.scriptMatchDisable.urlMatch(url!)];
+      if (this.scriptMatchDisable) {
+        matchedUuids = [...matchedUuids, ...this.scriptMatchDisable.urlMatch(url!)];
+      } else {
+        // 正常不会出现
+        console.error("Unexpected Error in getPageScriptMatchingResultByUrlInternal");
+      }
     }
 
     const ret = new Map<string, { uuid: string; effective: boolean }>();
-    this.getPageScriptMatchingResultByUrlInner(ret, matchedUuids, includeNonEffective);
+    this.processScriptMatchingRet(ret, matchedUuids, includeNonEffective);
     return ret;
   }
 
   async getPopupPageScriptMatchingResultByUrl(url: string) {
-    const ret = this.getPageScriptMatchingResultByUrl(url, false, true);
-    const disabledMatch =
-      this.popupDisabledScriptMatchCache ||
-      (this.popupDisabledScriptMatchCache = await this.createPopupDisabledScriptMatch());
-    this.getPageScriptMatchingResultByUrlInner(ret, disabledMatch.urlMatch(url), true);
+    if (!this.scriptMatchDisable) {
+      this.scriptMatchDisable = await this.createPopupDisabledScriptMatch();
+    }
+    const ret = this.getPageScriptMatchingResultByUrlInternal(url, true, true);
     return ret;
   }
 
-  private async createPopupDisabledScriptMatch(): Promise<UrlMatch<string>> {
+  async createPopupDisabledScriptMatch(): Promise<UrlMatch<string>> {
     const disabledMatch = new UrlMatch<string>();
     const uuidSort: Record<string, number> = {};
     const scripts = await this.scriptDAO.all();
@@ -1139,9 +1149,14 @@ export class RuntimeService {
       }
       // 前台 UserScript 腳本 並 已停用
 
-      const scriptRes = buildScriptRunResourceBasic(script);
-      const patterns = scriptURLPatternResults(scriptRes);
-      if (!patterns) continue;
+      let patterns = this.cachedPatterns.get(script.uuid);
+      if (!patterns) {
+        const scriptRes = buildScriptRunResourceBasic(script);
+        const p = scriptURLPatternResults(scriptRes);
+        if (!p) continue;
+        this.cachedPatterns.set(script.uuid, p);
+        patterns = p;
+      }
 
       const { uuid, sort } = script;
       const uuidOri = `${uuid}${ORIGINAL_URLMATCH_SUFFIX}`;
@@ -1223,7 +1238,7 @@ export class RuntimeService {
     }
 
     // 匹配当前页面的脚本（只包含有效脚本。自定义排除了的不包含）
-    const matchingResult = this.getPageScriptMatchingResultByUrl(url, false, false);
+    const matchingResult = this.getPageScriptMatchingResultByUrlInternal(url, false, false);
 
     // 该网址没有任何脚本匹配，包括排除匹配
     if (!matchingResult.size) return null;
@@ -1593,13 +1608,13 @@ export class RuntimeService {
     // 清理一下老数据
     this.scriptMatchEnable.clearRules(uuid);
     this.scriptMatchEnable.clearRules(uuidOri);
-    this.scriptMatchDisable.clearRules(uuid);
-    this.scriptMatchDisable.clearRules(uuidOri);
+    this.scriptMatchDisable?.clearRules(uuid);
+    this.scriptMatchDisable?.clearRules(uuidOri);
     const scriptMatch = scriptRes.status === SCRIPT_STATUS_ENABLE ? this.scriptMatchEnable : this.scriptMatchDisable;
     // 添加新的数据
-    scriptMatch.addRules(uuid, scriptUrlPatterns);
+    scriptMatch?.addRules(uuid, scriptUrlPatterns);
     if (originalUrlPatterns && originalUrlPatterns !== scriptUrlPatterns) {
-      scriptMatch.addRules(uuidOri, originalUrlPatterns);
+      scriptMatch?.addRules(uuidOri, originalUrlPatterns);
     }
     return matchInfoEntry;
   }
