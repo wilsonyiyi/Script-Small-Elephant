@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 import type { EmitEventRequest, ScriptLoadInfo, ScriptMatchInfo, ScriptMenu } from "./types";
 import type { IMessageQueue } from "@Packages/message/message_queue";
 import type { Group, IGetSender } from "@Packages/message/server";
@@ -8,7 +7,7 @@ import type { Script, ScriptDAO, ScriptRunResource, ScriptSite, TScriptInfo, Use
 import { SCRIPT_STATUS_DISABLE, SCRIPT_STATUS_ENABLE, SCRIPT_TYPE_NORMAL } from "@App/app/repo/scripts";
 import { type ValueService } from "./value";
 import GMApi, { GMExternalDependencies } from "./gm_api/gm_api";
-import type { TDeleteScript, TEnableScript, TInstallScript, TScriptValueUpdate, TSortedScript } from "../queue";
+import type { TDeleteScript, TEnableScript, TInstallScript, TSortedScript } from "../queue";
 import { type ScriptService } from "./script";
 import { runScript, stopScript } from "../offscreen/client";
 import {
@@ -1064,11 +1063,6 @@ export class RuntimeService {
       }
     }
     runtimeGlobal.registerState = failed ? RuntimeRegisterCode.UNSET : RuntimeRegisterCode.REGISTER_DONE;
-  }
-
-  // 给指定tab发送消息
-  sendMessageToTab(to: ExtMessageSender, action: string, data: any) {
-    // ignored;
   }
 
   // 给指定脚本触发事件
