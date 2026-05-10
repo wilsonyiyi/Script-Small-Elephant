@@ -526,6 +526,12 @@ export class RuntimeService {
         });
         return;
       }
+
+      const { uuid, sort } = script;
+      const uuidOri = `${uuid}${ORIGINAL_URLMATCH_SUFFIX}`;
+      commonSorter[uuid] = sort;
+      commonSorter[uuidOri] = sort;
+
       // 代码更新时脚本类别不会更改
       if (script.type === SCRIPT_TYPE_NORMAL) {
         const enable = script.status === SCRIPT_STATUS_ENABLE;
@@ -1158,6 +1164,7 @@ export class RuntimeService {
 
   async createPopupDisabledScriptMatch(): Promise<UrlMatch<string>> {
     const disabledMatch = new UrlMatch<string>();
+    disabledMatch.setupSorter(commonSorter);
     const uuidSort: Record<string, number> = {};
     const scripts = await this.scriptDAO.all();
     for (const script of scripts) {
@@ -1184,9 +1191,6 @@ export class RuntimeService {
         disabledMatch.addRules(uuidOri, patterns.originalUrlPatterns);
       }
     }
-    commonSorter = { ...commonSorter, ...uuidSort };
-    this.scriptMatchEnable.setupSorter(commonSorter);
-    disabledMatch.setupSorter(commonSorter);
     return disabledMatch;
   }
 
